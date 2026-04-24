@@ -239,6 +239,16 @@ Invoke-RestMethod `
 
 См. `Session State`.
 
+#### Example
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://localhost:8000/actions/click `
+  -ContentType "application/json" `
+  -Body '{"selector":"#Portal-drawer [data-name=''Overlay''] button[type=''button'']","action_name":"close pvz modal first button","wait_for_networkidle":false,"extra_wait_ms":3000}'
+```
+
 ### `POST /actions/press`
 
 Нажимает клавишу на элементе.
@@ -469,6 +479,63 @@ Invoke-RestMethod `
   -Uri http://localhost:8000/actions/click-anchor-by-span-text `
   -ContentType "application/json" `
   -Body '{"text":"Нужный раздел","scope_selector":".SomeContainer","timeout_ms":60000,"post_click_wait_ms":3000}'
+```
+
+### `POST /actions/extract-size-by-code`
+
+Ищет строку таблицы по коду товара и извлекает размер из текста найденной строки.
+
+#### Когда использовать
+
+Для таблиц, где нужно найти строку по артикулу/коду и достать из неё значение размера по регулярному выражению.
+
+#### Request Body
+
+```json
+{
+  "code": "203740740",
+  "row_selector": "[data-testid='Table-row-view']",
+  "value_cell_selector": "[data-testid='Cell--title']",
+  "size_regex": "Р-р\\s+([^\\n\\r]+)",
+  "timeout_ms": 60000
+}
+```
+
+#### Fields
+
+- `code` `string`: код, по которому ищется строка таблицы.
+- `row_selector` `string`: CSS-селектор строк таблицы. Сначала поиск идёт по `input[id='<code>']` или `input[name='<code>']` внутри строки, затем по тексту строки.
+- `value_cell_selector` `string`: CSS-селектор ячейки внутри найденной строки, из текста которой нужно извлечь размер.
+- `size_regex` `string`: регулярное выражение для поиска размера. Если в regex есть capturing group, в ответ вернётся первая непустая группа; иначе вернётся весь совпавший текст.
+- `timeout_ms` `integer | null`: timeout на поиск строки и ячейки.
+
+#### Response
+
+```json
+{
+  "session_active": true,
+  "current_url": "https://example.org/table",
+  "page_title": "Table",
+  "run_timestamp": "20260422_194512_123",
+  "run_directory": "/app/output/20260422_194512_123",
+  "last_action": "extract_size_by_code",
+  "last_error": null,
+  "session_uptime_ms": 18234,
+  "requested_code": "203740740",
+  "size": "42-44",
+  "matched_text": "Р-р 42-44",
+  "value_cell_text": "Артикул 203740740\nР-р 42-44"
+}
+```
+
+#### Example
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://localhost:8000/actions/extract-size-by-code `
+  -ContentType "application/json" `
+  -Body '{"code":"203740740","row_selector":"[data-testid=''Table-row-view'']","value_cell_selector":"[data-testid=''Cell--title'']","size_regex":"Р-р\\s+([^\\n\\r]+)","timeout_ms":60000}'
 ```
 
 ## Search And Snapshots
