@@ -1,0 +1,20 @@
+services:
+  browser-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: playwright-browser-worker
+    env_file:
+      - .env
+    volumes:
+      # Artifacts remain on the host for debugging after the container exits.
+      - ./output:/app/output
+    ports:
+      - "8000:8000"
+    # Chromium is more stable with a larger shared memory segment.
+    shm_size: "1gb"
+    init: true
+    stdin_open: true
+    tty: true
+    stop_grace_period: 20s
+    restart: "no"

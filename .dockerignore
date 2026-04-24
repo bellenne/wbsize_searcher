@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+output
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.log
+src/__pycache__
