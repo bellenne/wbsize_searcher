@@ -65,6 +65,7 @@ class AppConfig:
     browser_timeout_ms: int
     extra_wait_ms: int
     output_dir: Path
+    browser_profile_dir: Path
     log_level: str
     screenshot_full_page: bool
     save_html: bool
@@ -125,6 +126,7 @@ class AppConfig:
             browser_timeout_ms=_parse_int("BROWSER_TIMEOUT_MS", 60000),
             extra_wait_ms=_parse_int("EXTRA_WAIT_MS", 3000),
             output_dir=Path(os.getenv("OUTPUT_DIR", "/app/output")).expanduser(),
+            browser_profile_dir=Path(os.getenv("BROWSER_PROFILE_DIR", "/app/browser-profile")).expanduser(),
             log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
             screenshot_full_page=_parse_bool("SCREENSHOT_FULL_PAGE", True),
             save_html=_parse_bool("SAVE_HTML", True),
@@ -198,6 +200,7 @@ class AppConfig:
     def to_log_dict(self) -> dict[str, str | int | bool | None]:
         payload = asdict(self)
         payload["output_dir"] = str(self.output_dir)
+        payload["browser_profile_dir"] = str(self.browser_profile_dir)
         payload["auth_code_file"] = str(self.auth_code_file) if self.auth_code_file else None
         payload["auth_phone"] = _mask_value(self.auth_phone)
         payload["auth_code"] = _mask_value(self.auth_code, visible_suffix=0)

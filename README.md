@@ -31,6 +31,31 @@ docker compose up --build
 Invoke-RestMethod http://localhost:8000/health
 ```
 
+## Persistent browser profile and Docker restart
+
+- В `docker-compose.yml` сервис запускается с `restart: unless-stopped`, поэтому контейнер автоматически поднимется после рестарта сервера или Docker daemon.
+- Профиль Chromium хранится в `./browser-profile` на хосте и монтируется в `/app/browser-profile` внутри контейнера.
+- Для первой авторизации нужно поднять контейнер, запустить браузерную сессию через API и пройти логин вручную.
+- После этого cookies, localStorage, IndexedDB и прочие данные профиля сохраняются в `browser-profile`.
+- После `docker compose restart` или перезагрузки сервера контейнер поднимется снова; при следующем `POST /session/start` будет использован тот же профиль Chromium.
+- Авторизация сохранится, если сайт сам не инвалидировал сессию.
+- Чтобы полностью сбросить авторизацию, остановите контейнер и удалите `./browser-profile`.
+
+```bash
+docker compose up -d --build
+docker compose restart
+docker compose ps
+docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' playwright-browser-worker
+```
+
+Полный сброс профиля:
+
+```bash
+docker compose down
+rm -rf ./browser-profile
+docker compose up -d --build
+```
+
 ## Интеграция с Laravel и доменом
 
 Если скриншоты и другие артефакты нужно открывать прямо с домена Laravel-приложения, а не скачивать с сервера вручную, закладывайте это сразу через volume и публичный base URL.
@@ -311,6 +336,7 @@ output/<run_timestamp>/
 - `BROWSER_TIMEOUT_MS`
 - `EXTRA_WAIT_MS`
 - `OUTPUT_DIR`
+- `BROWSER_PROFILE_DIR`
 - `LOG_LEVEL`
 - `API_HOST`
 - `API_PORT`

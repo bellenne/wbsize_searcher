@@ -9,6 +9,8 @@ services:
     volumes:
       # Artifacts remain on the host for debugging after the container exits.
       - ./output:/app/output
+      # Persistent Chromium profile keeps cookies and local storage across container restarts.
+      - ./browser-profile:/app/browser-profile
     ports:
       - "8000:8000"
     # Chromium is more stable with a larger shared memory segment.
@@ -17,4 +19,4 @@ services:
     stdin_open: true
     tty: true
     stop_grace_period: 20s
-    restart: "no"
+    restart: unless-stopped

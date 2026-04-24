@@ -114,16 +114,13 @@ class BrowserRunner:
         # proxy, cookies, HAR и другие расширения без переписывания run().
         self.loggers.app.info("Starting Playwright runtime.")
         self.playwright = sync_playwright().start()
+        self.config.browser_profile_dir.mkdir(parents=True, exist_ok=True)
         self.loggers.app.info(
-            "Launching Chromium. headless=%s timeout_ms=%s",
+            "Launching Chromium persistent context. headless=%s timeout_ms=%s profile_dir=%s",
             self.config.headless,
             self.config.browser_timeout_ms,
+            self.config.browser_profile_dir,
         )
-        self.browser = self.playwright.chromium.launch(
-            headless=self.config.headless,
-            args=["--disable-dev-shm-usage"],
-        )
-        self.loggers.app.info("Chromium started successfully.")
 
         context_options: dict[str, Any] = {
             "viewport": {
@@ -134,8 +131,17 @@ class BrowserRunner:
         if self.config.user_agent:
             context_options["user_agent"] = self.config.user_agent
 
-        self.loggers.app.info("Creating browser context with options: %s", context_options)
-        self.context = self.browser.new_context(**context_options)
+        self.loggers.app.info("Creating persistent browser context with options: %s", context_options)
+        self.context = self.playwright.chromium.launch_persistent_context(
+            user_data_dir=str(self.config.browser_profile_dir),
+            headless=self.config.headless,
+            args=["--disable-dev-shm-usage"],
+            **context_options,
+        )
+        self.browser = self.context.browser
+        if self.browser is None:
+            raise RuntimeError("Persistent browser context did not expose a browser instance.")
+        self.loggers.app.info("Chromium persistent context started successfully.")
         self.context.set_default_timeout(self.config.browser_timeout_ms)
         self.context.set_default_navigation_timeout(self.config.browser_timeout_ms)
         self.loggers.app.info("Browser context created.")
@@ -666,7 +672,7 @@ class BrowserRunner:
             except Exception:
                 self.loggers.app.exception("Failed to close browser context cleanly.")
 
-        if self.browser is not None:
+        elif self.browser is not None:
             try:
                 self.loggers.app.info("Closing browser.")
                 self.browser.close()

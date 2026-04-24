@@ -107,12 +107,12 @@ class BrowserSessionManager:
 
         self._log_info("Starting Playwright runtime.")
         self.playwright = sync_playwright().start()
-        self._log_info("Launching Chromium. headless=%s", self.config.headless)
-        self.browser = self.playwright.chromium.launch(
-            headless=self.config.headless,
-            args=["--disable-dev-shm-usage"],
+        self.config.browser_profile_dir.mkdir(parents=True, exist_ok=True)
+        self._log_info(
+            "Launching Chromium persistent context. headless=%s profile_dir=%s",
+            self.config.headless,
+            self.config.browser_profile_dir,
         )
-        self._log_info("Chromium started successfully.")
 
         context_options: dict[str, Any] = {
             "viewport": {
@@ -123,8 +123,17 @@ class BrowserSessionManager:
         if self.config.user_agent:
             context_options["user_agent"] = self.config.user_agent
 
-        self._log_info("Creating browser context with options: %s", context_options)
-        self.context = self.browser.new_context(**context_options)
+        self._log_info("Creating persistent browser context with options: %s", context_options)
+        self.context = self.playwright.chromium.launch_persistent_context(
+            user_data_dir=str(self.config.browser_profile_dir),
+            headless=self.config.headless,
+            args=["--disable-dev-shm-usage"],
+            **context_options,
+        )
+        self.browser = self.context.browser
+        if self.browser is None:
+            raise RuntimeError("Persistent browser context did not expose a browser instance.")
+        self._log_info("Chromium persistent context started successfully.")
         self.context.set_default_timeout(self.config.browser_timeout_ms)
         self.context.set_default_navigation_timeout(self.config.browser_timeout_ms)
         self._log_info("Browser context created.")
@@ -172,7 +181,7 @@ class BrowserSessionManager:
                 self.context.close()
             except Exception:
                 self._log_exception("Failed to close browser context cleanly.")
-        if self.browser is not None:
+        elif self.browser is not None:
             try:
                 self.browser.close()
             except Exception:

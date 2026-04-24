@@ -2,6 +2,7 @@
 .gitignore
 .env
 output
+browser-profile
 __pycache__
 *.pyc
 *.pyo
