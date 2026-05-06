@@ -59,6 +59,7 @@ def _normalize_base_url(value: str | None) -> str | None:
 
 @dataclass(slots=True)
 class AppConfig:
+    worker_id: str
     target_url: str
     search_text: str
     headless: bool
@@ -79,6 +80,8 @@ class AppConfig:
     api_host: str
     api_port: int
     artifact_public_base_url: str | None
+    auto_start_session: bool
+    auto_start_target_url: str | None
     auth_enabled: bool
     auth_phone: str | None
     auth_phone_selector: str | None
@@ -91,6 +94,8 @@ class AppConfig:
     auth_code_poll_interval_ms: int
     auth_wait_after_phone_submit_ms: int
     auth_wait_after_code_submit_ms: int
+    authorized_url_prefix: str | None
+    auth_required_url_prefix: str | None
     auth_interactive_code_entry: bool
     post_auth_wait_for_networkidle: bool
     post_auth_extra_wait_ms: int
@@ -100,6 +105,14 @@ class AppConfig:
     target_button_click_wait_ms: int
     keep_session_alive: bool
     keep_alive_log_interval_ms: int
+    scenario_config_file: Path | None
+    workspace_url: str | None
+    close_modal_selector: str | None
+    close_modal_div_text: str | None
+    close_modal_click_wait_ms: int
+    search_row_selector: str
+    search_value_cell_selector: str
+    search_size_regex: str
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -119,12 +132,14 @@ class AppConfig:
         auth_code_selector = os.getenv("AUTH_CODE_SELECTOR", "").strip() or None
         auth_code_submit_selector = os.getenv("AUTH_CODE_SUBMIT_SELECTOR", "").strip() or None
         target_button_div_text = os.getenv("TARGET_BUTTON_DIV_TEXT", "").strip() or None
+        scenario_config_file_raw = os.getenv("SCENARIO_CONFIG_FILE", "").strip()
         config = cls(
+            worker_id=os.getenv("WORKER_ID", "worker-1").strip() or "worker-1",
             target_url=target_url,
             search_text=os.getenv("SEARCH_TEXT", "").strip(),
             headless=_parse_bool("HEADLESS", True),
             browser_timeout_ms=_parse_int("BROWSER_TIMEOUT_MS", 60000),
-            extra_wait_ms=_parse_int("EXTRA_WAIT_MS", 3000),
+            extra_wait_ms=_parse_int("EXTRA_WAIT_MS", 2000),
             output_dir=Path(os.getenv("OUTPUT_DIR", "/app/output")).expanduser(),
             browser_profile_dir=Path(os.getenv("BROWSER_PROFILE_DIR", "/app/browser-profile")).expanduser(),
             log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO",
@@ -140,6 +155,8 @@ class AppConfig:
             api_host=os.getenv("API_HOST", "0.0.0.0").strip() or "0.0.0.0",
             api_port=_parse_int("API_PORT", 8000),
             artifact_public_base_url=_normalize_base_url(os.getenv("ARTIFACT_PUBLIC_BASE_URL")),
+            auto_start_session=_parse_bool("AUTO_START_SESSION", False),
+            auto_start_target_url=os.getenv("AUTO_START_TARGET_URL", "").strip() or None,
             auth_enabled=_parse_bool("AUTH_ENABLED", False),
             auth_phone=auth_phone,
             auth_phone_selector=auth_phone_selector,
@@ -152,6 +169,16 @@ class AppConfig:
             auth_code_poll_interval_ms=_parse_int("AUTH_CODE_POLL_INTERVAL_MS", 1000),
             auth_wait_after_phone_submit_ms=_parse_int("AUTH_WAIT_AFTER_PHONE_SUBMIT_MS", 3000),
             auth_wait_after_code_submit_ms=_parse_int("AUTH_WAIT_AFTER_CODE_SUBMIT_MS", 5000),
+            authorized_url_prefix=os.getenv(
+                "AUTHORIZED_URL_PREFIX",
+                "https://seller.wildberries.ru/marketplace-orders-fbs/new-tasks",
+            ).strip()
+            or None,
+            auth_required_url_prefix=os.getenv(
+                "AUTH_REQUIRED_URL_PREFIX",
+                "https://seller-auth.wildberries.ru/ru/",
+            ).strip()
+            or None,
             auth_interactive_code_entry=_parse_bool("AUTH_INTERACTIVE_CODE_ENTRY", True),
             post_auth_wait_for_networkidle=_parse_bool("POST_AUTH_WAIT_FOR_NETWORKIDLE", True),
             post_auth_extra_wait_ms=_parse_int("POST_AUTH_EXTRA_WAIT_MS", 5000),
@@ -161,6 +188,17 @@ class AppConfig:
             target_button_click_wait_ms=_parse_int("TARGET_BUTTON_CLICK_WAIT_MS", 3000),
             keep_session_alive=_parse_bool("KEEP_SESSION_ALIVE", True),
             keep_alive_log_interval_ms=_parse_int("KEEP_ALIVE_LOG_INTERVAL_MS", 30000),
+            scenario_config_file=Path(scenario_config_file_raw).expanduser() if scenario_config_file_raw else None,
+            workspace_url=os.getenv("WORKSPACE_URL", "").strip() or None,
+            close_modal_selector=os.getenv("CLOSE_MODAL_SELECTOR", "").strip() or None,
+            close_modal_div_text=os.getenv("CLOSE_MODAL_DIV_TEXT", "").strip() or None,
+            close_modal_click_wait_ms=_parse_int("CLOSE_MODAL_CLICK_WAIT_MS", 3000),
+            search_row_selector=os.getenv("SEARCH_ROW_SELECTOR", "[data-testid='Table-row-view']").strip()
+            or "[data-testid='Table-row-view']",
+            search_value_cell_selector=os.getenv("SEARCH_VALUE_CELL_SELECTOR", "[data-testid='Cell--title']").strip()
+            or "[data-testid='Cell--title']",
+            search_size_regex=os.getenv("SEARCH_SIZE_REGEX", r"Р\s*-\s*р[\s\xa0]+([^\n\r]+)").strip()
+            or r"Р\s*-\s*р[\s\xa0]+([^\n\r]+)",
         )
         config.validate()
         return config
@@ -189,6 +227,8 @@ class AppConfig:
             raise ValueError("TARGET_BUTTON_CLICK_WAIT_MS must be 0 or greater.")
         if self.keep_alive_log_interval_ms <= 0:
             raise ValueError("KEEP_ALIVE_LOG_INTERVAL_MS must be greater than 0.")
+        if self.close_modal_click_wait_ms < 0:
+            raise ValueError("CLOSE_MODAL_CLICK_WAIT_MS must be 0 or greater.")
         if self.auth_enabled:
             if not self.auth_phone:
                 raise ValueError("AUTH_PHONE is required when AUTH_ENABLED=true.")

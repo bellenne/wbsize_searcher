@@ -16,9 +16,10 @@ RUN python -m pip install --upgrade pip && \
     pip install -r /app/requirements.txt
 
 COPY src /app/src
+COPY balancer /app/balancer
 COPY README.md /app/README.md
 
-RUN mkdir -p /app/output
+RUN mkdir -p /app/output /app/balancer-data
 
 # The container entrypoint stays intentionally simple for Docker Compose usage.
 CMD ["python", "src/main.py"]

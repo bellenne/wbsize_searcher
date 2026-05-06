@@ -10,12 +10,12 @@ class SessionStartRequest(BaseModel):
 
 class NavigateRequest(BaseModel):
     url: str
-    wait_for_networkidle: bool = True
+    wait_for_networkidle: bool = False
     extra_wait_ms: int | None = None
 
 
 class WaitRequest(BaseModel):
-    wait_for_networkidle: bool = True
+    wait_for_networkidle: bool = False
     extra_wait_ms: int = 0
     timeout_ms: int | None = None
     snapshot_name: str = "manual_wait"
@@ -51,7 +51,7 @@ class AuthCodeRequest(BaseModel):
     code: str
     selector: str | None = None
     submit_selector: str | None = None
-    wait_for_networkidle: bool = True
+    wait_for_networkidle: bool = False
     extra_wait_ms: int | None = None
 
 
@@ -86,7 +86,7 @@ class ExtractSizeByCodeRequest(BaseModel):
     code: str
     row_selector: str = "[data-testid='Table-row-view']"
     value_cell_selector: str = "[data-testid='Cell--title']"
-    size_regex: str = r"Р-р\s+([^\n\r]+)"
+    size_regex: str = r"Р\s*-\s*р[\s\xa0]+([^\n\r]+)"
     timeout_ms: int | None = None
 
 
@@ -94,3 +94,17 @@ class SnapshotRequest(BaseModel):
     name: str = Field(default="manual_snapshot")
     save_html: bool | None = None
     save_text: bool | None = None
+
+
+class SearchSizeTaskRequest(BaseModel):
+    task_id: str
+    external_task_id: str | None = None
+    order_number: str | None = None
+    code: str | None = None
+    force_refresh: bool = False
+    close_modal: bool = True
+    scenario_name: str | None = None
+    cabinet: str | None = None
+    account: str | None = None
+    attempt: int | None = None
+    metadata: dict[str, object] | None = None

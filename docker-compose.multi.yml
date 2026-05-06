@@ -1,0 +1,98 @@
+services:
+  wbsize-balancer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wbsize-balancer
+    command: ["python", "balancer/main.py"]
+    environment:
+      API_PORT: 8000
+      WORKERS: "browser-worker-1=http://browser-worker-1:8000,browser-worker-2=http://browser-worker-2:8000,browser-worker-3=http://browser-worker-3:8000,browser-worker-4=http://browser-worker-4:8000,browser-worker-5=http://browser-worker-5:8000"
+      TASK_MAX_ATTEMPTS: ${TASK_MAX_ATTEMPTS:-2}
+      TASK_TIMEOUT_SECONDS: ${TASK_TIMEOUT_SECONDS:-180}
+      CALLBACK_MAX_ATTEMPTS: ${CALLBACK_MAX_ATTEMPTS:-5}
+      CALLBACK_TIMEOUT_SECONDS: ${CALLBACK_TIMEOUT_SECONDS:-15}
+      WORKER_REFRESH_TTL_SECONDS: ${WORKER_REFRESH_TTL_SECONDS:-300}
+      WORKER_STATUS_POLL_INTERVAL_SECONDS: ${WORKER_STATUS_POLL_INTERVAL_SECONDS:-5}
+      BALANCER_DATA_DIR: /app/balancer-data
+      DEFAULT_CALLBACK_TOKEN: ${DEFAULT_CALLBACK_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./balancer-data:/app/balancer-data
+    ports:
+      - "8090:8000"
+    depends_on:
+      - browser-worker-1
+      - browser-worker-2
+      - browser-worker-3
+      - browser-worker-4
+      - browser-worker-5
+    init: true
+    stop_grace_period: 20s
+    restart: unless-stopped
+
+  browser-worker-1: &browser-worker
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "src/main.py"]
+    env_file:
+      - .env
+    environment:
+      WORKER_ID: browser-worker-1
+      API_PORT: 8000
+      OUTPUT_DIR: /app/output
+      BROWSER_PROFILE_DIR: /app/browser-profile
+    volumes:
+      - ./output/worker-1:/app/output
+      - ./browser-profile/worker-1:/app/browser-profile
+    expose:
+      - "8000"
+    shm_size: "1gb"
+    init: true
+    stop_grace_period: 20s
+    restart: unless-stopped
+
+  browser-worker-2:
+    <<: *browser-worker
+    environment:
+      WORKER_ID: browser-worker-2
+      API_PORT: 8000
+      OUTPUT_DIR: /app/output
+      BROWSER_PROFILE_DIR: /app/browser-profile
+    volumes:
+      - ./output/worker-2:/app/output
+      - ./browser-profile/worker-2:/app/browser-profile
+
+  browser-worker-3:
+    <<: *browser-worker
+    environment:
+      WORKER_ID: browser-worker-3
+      API_PORT: 8000
+      OUTPUT_DIR: /app/output
+      BROWSER_PROFILE_DIR: /app/browser-profile
+    volumes:
+      - ./output/worker-3:/app/output
+      - ./browser-profile/worker-3:/app/browser-profile
+
+  browser-worker-4:
+    <<: *browser-worker
+    environment:
+      WORKER_ID: browser-worker-4
+      API_PORT: 8000
+      OUTPUT_DIR: /app/output
+      BROWSER_PROFILE_DIR: /app/browser-profile
+    volumes:
+      - ./output/worker-4:/app/output
+      - ./browser-profile/worker-4:/app/browser-profile
+
+  browser-worker-5:
+    <<: *browser-worker
+    environment:
+      WORKER_ID: browser-worker-5
+      API_PORT: 8000
+      OUTPUT_DIR: /app/output
+      BROWSER_PROFILE_DIR: /app/browser-profile
+    volumes:
+      - ./output/worker-5:/app/output
+      - ./browser-profile/worker-5:/app/browser-profile

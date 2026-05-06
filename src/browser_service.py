@@ -1,8 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -33,6 +34,7 @@ from utils import (
     write_json_file,
     write_text_file,
 )
+from worker_state import WorkerTaskLock
 
 
 class BrowserSessionManager:
@@ -52,11 +54,117 @@ class BrowserSessionManager:
         self.trace_started = False
         self.operation_counter = 0
         self.session_started_at: float | None = None
+        self.worker_started_at = perf_counter()
+        self.worker_status = "starting"
+        self.authorized = not config.auth_enabled
+        self.current_task_id: str | None = None
+        self.last_refresh_at: str | None = None
+        self.last_task_at: str | None = None
+        self._task_lock = WorkerTaskLock()
         self.last_error: str | None = None
         self.last_action: str | None = None
         self.last_artifacts: dict[str, dict[str, str | None]] = {}
 
-    def start_session(self, target_url: str | None = None, restart_if_running: bool = False) -> dict[str, Any]:
+    def try_begin_task(self, task_id: str) -> bool:
+        if not self._task_lock.try_begin(task_id):
+            return False
+        self.current_task_id = task_id
+        self.worker_status = "busy"
+        self.last_task_at = self._utc_now()
+        return True
+
+    def finish_task(self, success: bool, error_code: str | None = None) -> None:
+        if error_code == "AUTH_REQUIRED":
+            self.worker_status = "auth_required"
+            self.authorized = False
+        elif error_code == "BROWSER_ERROR":
+            self.worker_status = "error"
+        elif success:
+            if self.is_session_active():
+                self.refresh_authorization_status_from_url()
+                self.worker_status = "idle" if self.authorized else "auth_required"
+            else:
+                self.worker_status = "auth_required"
+        elif self.worker_status == "busy":
+            self.worker_status = "idle" if self.is_session_active() else "auth_required"
+        self.current_task_id = None
+        self._task_lock.finish()
+
+    def get_worker_status(self) -> dict[str, Any]:
+        self.refresh_authorization_status_from_url()
+        browser_ready = self.is_session_active()
+        status = self.worker_status
+        if self.current_task_id:
+            status = "busy"
+        elif status not in {"starting", "auth_required", "idle", "busy", "error"}:
+            status = "error"
+        elif status == "starting" and browser_ready:
+            status = "idle"
+        elif status in {"starting", "idle"} and not browser_ready:
+            status = "auth_required"
+
+        return {
+            "worker_id": self.config.worker_id,
+            "status": status,
+            "authorized": self.authorized,
+            "browser_ready": browser_ready,
+            "current_task_id": self.current_task_id,
+            "last_refresh_at": self.last_refresh_at,
+            "last_task_at": self.last_task_at,
+            "last_error": self.last_error,
+            "uptime_seconds": int(perf_counter() - self.worker_started_at),
+        }
+
+    def refresh_authorization_status_from_url(self) -> bool:
+        if self.page is None:
+            self.authorized = False
+            if self.worker_status != "error":
+                self.worker_status = "auth_required"
+            return self.authorized
+
+        try:
+            current_url = self.page.url
+        except Exception as exc:
+            self.mark_browser_error(str(exc))
+            return self.authorized
+
+        if self.config.authorized_url_prefix and current_url.startswith(self.config.authorized_url_prefix):
+            self.authorized = True
+            if self.worker_status in {"starting", "auth_required"}:
+                self.worker_status = "idle"
+            return self.authorized
+
+        if self.config.auth_required_url_prefix and current_url.startswith(self.config.auth_required_url_prefix):
+            self.authorized = False
+            if self.worker_status not in {"busy", "error"}:
+                self.worker_status = "auth_required"
+            return self.authorized
+
+        if self.worker_status not in {"busy", "error"}:
+            self.authorized = False
+            self.worker_status = "auth_required"
+
+        return self.authorized
+
+    def mark_auth_required(self, message: str | None = None) -> None:
+        self.authorized = False
+        self.worker_status = "auth_required"
+        if message:
+            self.last_error = message
+
+    def mark_browser_error(self, message: str) -> None:
+        self.worker_status = "error"
+        self.last_error = message
+
+    def _utc_now(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def start_session(
+        self,
+        target_url: str | None = None,
+        restart_if_running: bool = False,
+        wait_for_networkidle: bool = False,
+    ) -> dict[str, Any]:
         if self.is_session_active():
             if not restart_if_running:
                 self._log_info("Session already active. Returning current state without restart.")
@@ -152,9 +260,13 @@ class BrowserSessionManager:
         self.save_snapshot("browser_started", save_html=False, save_text=False)
         self.navigate(
             url=target_url,
-            wait_for_networkidle=True,
+            wait_for_networkidle=wait_for_networkidle,
             extra_wait_ms=self.config.extra_wait_ms,
         )
+        self.refresh_authorization_status_from_url()
+        if not self.config.auth_enabled and self.worker_status != "auth_required":
+            self.authorized = True
+            self.worker_status = "idle"
         return self.get_state()
 
     def close_session(self) -> dict[str, Any]:
@@ -204,34 +316,40 @@ class BrowserSessionManager:
         self.page = None
         self.trace_started = False
         self.session_started_at = None
+        self.worker_status = "auth_required"
+        self.authorized = False
         state = self.get_state()
         self.loggers = None
         return state
 
-    def navigate(self, url: str, wait_for_networkidle: bool = True, extra_wait_ms: int | None = None) -> dict[str, Any]:
+    def navigate(self, url: str, wait_for_networkidle: bool = False, extra_wait_ms: int | None = None) -> dict[str, Any]:
         page = self._require_page()
         self.last_action = "navigate"
-        self._log_info("Navigating to URL: %s", url)
+        self._log_info("Навигация: отправляю браузер на страницу. url=%s", url)
         response = page.goto(
             url,
-            wait_until="domcontentloaded",
+            wait_until="commit",
             timeout=self.config.browser_timeout_ms,
         )
         if response is None:
-            self._log_info("Navigation completed without response object. current_url=%s", page.url)
+            self._log_info("Навигация: запрос отправлен, ответа страницы нет. current_url=%s", page.url)
         else:
-            self._log_info("Navigation completed. current_url=%s status=%s", page.url, response.status)
+            self._log_info("Навигация: запрос отправлен. current_url=%s http_status=%s", page.url, response.status)
+        if wait_for_networkidle:
+            self._log_info("Навигация: параметр wait_for_networkidle получен, но отключен намеренно.")
         self.wait_for_page_ready(
-            wait_for_networkidle=wait_for_networkidle,
+            wait_for_networkidle=False,
             extra_wait_ms=self.config.extra_wait_ms if extra_wait_ms is None else extra_wait_ms,
             timeout_ms=self.config.browser_timeout_ms,
             snapshot_name="after_navigate",
         )
+        self.last_refresh_at = self._utc_now()
+        self.refresh_authorization_status_from_url()
         return self.get_state()
 
     def wait_for_page_ready(
         self,
-        wait_for_networkidle: bool = True,
+        wait_for_networkidle: bool = False,
         extra_wait_ms: int = 0,
         timeout_ms: int | None = None,
         snapshot_name: str = "page_ready",
@@ -240,17 +358,16 @@ class BrowserSessionManager:
         timeout_ms = timeout_ms or self.config.browser_timeout_ms
         self.last_action = "wait_for_page_ready"
         self._log_info(
-            "Waiting for page readiness. wait_for_networkidle=%s extra_wait_ms=%s timeout_ms=%s",
+            "Ожидание: networkidle=%s, простая пауза=%s мс, timeout=%s мс",
             wait_for_networkidle,
             extra_wait_ms,
             timeout_ms,
         )
         if wait_for_networkidle:
-            page.wait_for_load_state("networkidle", timeout=timeout_ms)
-            self._log_info("networkidle reached.")
+            self._log_info("Ожидание: networkidle отключен намеренно, чтобы WB не давал timeout.")
         if extra_wait_ms > 0:
             page.wait_for_timeout(extra_wait_ms)
-            self._log_info("Extra wait finished. extra_wait_ms=%s", extra_wait_ms)
+            self._log_info("Ожидание: простая пауза завершена. extra_wait_ms=%s", extra_wait_ms)
         self.save_snapshot(snapshot_name, save_html=self.config.save_html, save_text=False)
         return self.get_state()
 
@@ -332,7 +449,7 @@ class BrowserSessionManager:
         code: str,
         selector: str | None = None,
         submit_selector: str | None = None,
-        wait_for_networkidle: bool = True,
+        wait_for_networkidle: bool = False,
         extra_wait_ms: int | None = None,
     ) -> dict[str, Any]:
         selector = selector or self.config.auth_code_selector
@@ -352,6 +469,7 @@ class BrowserSessionManager:
             timeout_ms=self.config.browser_timeout_ms,
             snapshot_name="after_auth_code_submit",
         )
+        self.refresh_authorization_status_from_url()
         return self.get_state()
 
     def find_button_by_div_text(
@@ -591,7 +709,7 @@ class BrowserSessionManager:
         code: str,
         row_selector: str = "[data-testid='Table-row-view']",
         value_cell_selector: str = "[data-testid='Cell--title']",
-        size_regex: str = r"Р-р\s+([^\n\r]+)",
+        size_regex: str = r"Р\s*-\s*р[\s\xa0]+([^\n\r]+)",
         timeout_ms: int | None = None,
     ) -> dict[str, Any]:
         page = self._require_page()
@@ -609,7 +727,7 @@ class BrowserSessionManager:
         row_by_text = row_candidates.filter(has_text=self._build_whitespace_tolerant_regex(code)).first
 
         self._log_info(
-            "Looking for row by code. code=%r row_selector=%r value_cell_selector=%r timeout_ms=%s current_url=%s",
+            "Поиск размера: ищу строку по номеру заказа. order_number=%r row_selector=%r value_cell_selector=%r timeout_ms=%s current_url=%s",
             code,
             row_selector,
             value_cell_selector,
@@ -632,7 +750,7 @@ class BrowserSessionManager:
                     has_text=self._build_whitespace_tolerant_regex(code),
                 ).count()
                 message = (
-                    "Row by code was not found. "
+                    "Поиск размера: строка по номеру заказа не найдена. "
                     f"code={code!r} row_selector={row_selector!r} "
                     f"matching_row_count_by_input={matching_row_count_by_input} "
                     f"matching_row_count_by_text={matching_row_count_by_text} current_url={page.url}"
@@ -647,7 +765,7 @@ class BrowserSessionManager:
             value_cell.wait_for(state="visible", timeout=timeout_ms)
         except PlaywrightTimeoutError as exc:
             message = (
-                "Value cell was not found in row by code. "
+                "Поиск размера: ячейка размера не найдена в строке заказа. "
                 f"code={code!r} value_cell_selector={value_cell_selector!r} current_url={page.url}"
             )
             self.last_error = message
@@ -669,7 +787,7 @@ class BrowserSessionManager:
 
         if match is None:
             message = (
-                "Size pattern was not found in row text. "
+                "Поиск размера: текст найден, но размер по шаблону не найден. "
                 f"code={code!r} size_regex={size_regex!r} current_url={page.url}"
             )
             self.last_error = message
@@ -680,6 +798,12 @@ class BrowserSessionManager:
         extracted_size = next((group.strip() for group in match.groups() if group and group.strip()), match.group(0).strip())
 
         self.save_snapshot("extract_size_by_code_found", save_html=False, save_text=False)
+        self._log_info(
+            "Поиск размера: размер найден. order_number=%r size=%r matched_text=%r",
+            code,
+            extracted_size,
+            match.group(0).strip(),
+        )
         result = self.get_state()
         result["requested_code"] = code
         result["size"] = extracted_size
@@ -887,18 +1011,17 @@ class BrowserSessionManager:
             self.loggers.app.exception("Failed to dismiss dialog.")
 
     def _on_dom_content_loaded(self) -> None:
-        self._log_info("Page event: domcontentloaded. url=%s", self.page.url if self.page else "<no-page>")
+        self._log_info("Страница: DOM загружен. url=%s", self.page.url if self.page else "<no-page>")
 
     def _on_page_load(self) -> None:
-        self._log_info("Page event: load. url=%s", self.page.url if self.page else "<no-page>")
+        self._log_info("Страница: событие load. url=%s", self.page.url if self.page else "<no-page>")
 
     def _on_frame_navigated(self, frame: Any) -> None:
-        self._log_info(
-            "Frame navigated. name=%s url=%s is_main=%s",
-            frame.name,
-            frame.url,
-            frame == (self.page.main_frame if self.page is not None else None),
-        )
+        if self.page is None or frame != self.page.main_frame:
+            return
+        if frame.url == "about:blank":
+            return
+        self._log_info("Страница: основной фрейм перешел на url=%s", frame.url)
 
     def _on_request(self, request: Request) -> None:
         if self.loggers is None:

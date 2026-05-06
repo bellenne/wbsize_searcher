@@ -8,3 +8,9 @@ __pycache__/
 output/*
 !output/.gitkeep
 browser-profile/
+balancer-data/
+*.sqlite
+storage_state*.json
+test-data/
+tmp*/
+wbsize-balancer-test-*/
